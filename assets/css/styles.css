@@ -1,51 +1,70 @@
-
 * { box-sizing: border-box; }
-
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-
 body { font-family: Arial, sans-serif; background: #07111f; color: white; }
-
 #scene-container { position: fixed; inset: 0; }
-
 canvas { display: block; }
 
-
+/* HUD legible y con texto más grande */
 .hud {
+  position: fixed; 
+  z-index: 10; 
+  top: 20px; 
+  left: 20px;
+  width: 100%;
+  max-width: 460px; 
+  background: rgba(7, 17, 31, 0.88);
+  backdrop-filter: blur(12px); 
+  border-left: 5px solid #22d3ee;
+  border-radius: 8px;
+  padding: 1.25rem !important;
+}
 
-  position: fixed; z-index: 10; top: 16px; left: 16px;
+.hud h1 {
+  font-size: 1.35rem !important;
+  font-weight: 700;
+  color: #38bdf8;
+}
 
-  max-width: 430px; background: rgba(7, 17, 31, .82);
-
-  backdrop-filter: blur(10px); border-left: 4px solid #22d3ee;
-
+.hud p, .hud div {
+  font-size: 0.95rem !important;
+  line-height: 1.4;
 }
 
 .crosshair {
-
-  position: fixed; z-index: 11; left: 50%; top: 50%;
-
-  transform: translate(-50%, -50%); font-size: 28px;
-
-  color: #67e8f9; text-shadow: 0 0 12px #22d3ee;
-
+  position: fixed; 
+  z-index: 11; 
+  left: 50%; 
+  top: 50%;
+  transform: translate(-50%, -50%); 
+  font-size: 32px;
+  color: #67e8f9; 
+  text-shadow: 0 0 12px #22d3ee;
   pointer-events: none;
-
 }
 
 .app-footer {
-
-  position: fixed; z-index: 10; left: 0; right: 0; bottom: 0;
-
-  background: rgba(7, 17, 31, .82); backdrop-filter: blur(8px);
-
+  position: fixed; 
+  z-index: 10; 
+  left: 0; 
+  right: 0; 
+  bottom: 0;
+  background: rgba(7, 17, 31, .88); 
+  backdrop-filter: blur(8px);
+  font-size: 0.85rem;
+  color: #cbd5e1;
 }
 
-.key { min-width: 2rem; display: inline-block; }
+.key { 
+  min-width: 2.2rem; 
+  display: inline-block; 
+  text-align: center;
+  font-size: 0.85rem !important;
+  padding: 0.25rem 0.4rem;
+  background-color: #1e293b;
+  border: 1px solid #475569;
+}
 
 @media (max-width: 576px) {
-
-  .hud { right: 12px; left: 12px; max-width: none; font-size: .82rem; }
-
-  .app-footer { font-size: .68rem; }
-
+  .hud { right: 12px; left: 12px; max-width: none; }
+  .app-footer { font-size: .75rem; }
 }
