@@ -4,31 +4,21 @@ body { font-family: Arial, sans-serif; background: #07111f; color: white; }
 #scene-container { position: fixed; inset: 0; }
 canvas { display: block; }
 
-/* HUD legible y con texto más grande */
 .hud {
   position: fixed; 
   z-index: 10; 
   top: 20px; 
   left: 20px;
   width: 100%;
-  max-width: 460px; 
-  background: rgba(7, 17, 31, 0.88);
-  backdrop-filter: blur(12px); 
+  max-width: 480px; 
+  background: rgba(7, 17, 31, 0.90);
+  backdrop-filter: blur(14px); 
   border-left: 5px solid #22d3ee;
-  border-radius: 8px;
-  padding: 1.25rem !important;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
-.hud h1 {
-  font-size: 1.35rem !important;
-  font-weight: 700;
-  color: #38bdf8;
-}
-
-.hud p, .hud div {
-  font-size: 0.95rem !important;
-  line-height: 1.4;
-}
+.text-cyan { color: #38bdf8; font-weight: 700; }
 
 .crosshair {
   position: fixed; 
@@ -36,9 +26,9 @@ canvas { display: block; }
   left: 50%; 
   top: 50%;
   transform: translate(-50%, -50%); 
-  font-size: 32px;
+  font-size: 30px;
   color: #67e8f9; 
-  text-shadow: 0 0 12px #22d3ee;
+  text-shadow: 0 0 14px #22d3ee;
   pointer-events: none;
 }
 
@@ -58,13 +48,9 @@ canvas { display: block; }
   min-width: 2.2rem; 
   display: inline-block; 
   text-align: center;
-  font-size: 0.85rem !important;
-  padding: 0.25rem 0.4rem;
+  font-size: 0.82rem !important;
+  padding: 0.2rem 0.4rem;
   background-color: #1e293b;
   border: 1px solid #475569;
-}
-
-@media (max-width: 576px) {
-  .hud { right: 12px; left: 12px; max-width: none; }
-  .app-footer { font-size: .75rem; }
+  border-radius: 4px;
 }

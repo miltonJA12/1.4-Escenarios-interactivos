@@ -2,14 +2,13 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Octree } from 'three/addons/math/Octree.js';
 import { Capsule } from 'three/addons/math/Capsule.js';
+import { Sky } from 'three/addons/objects/Sky.js';
 import RAPIER from 'https://cdn.skypack.dev/@dimforge/rapier3d-compat';
 
 await RAPIER.init({});
 
 const container = document.getElementById('scene-container');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x07111f);
-scene.fog = new THREE.Fog(0x07111f, 18, 65);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.rotation.order = 'YXZ';
@@ -19,87 +18,100 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
 container.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x182030, 1.8));
-const sun = new THREE.DirectionalLight(0xffffff, 3);
-sun.position.set(-5, 18, 6);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-scene.add(sun);
+// ==========================================
+// 1. CIELO Y ATMÓSFERA DINÁMICA (SKY SHADER)
+// ==========================================
+const sky = new Sky();
+sky.scale.setScalar(450000);
+scene.add(sky);
+
+const sun = new THREE.Vector3();
+const skyUniforms = sky.material.uniforms;
+skyUniforms['turbidity'].value = 10;
+skyUniforms['rayleigh'].value = 3;
+skyUniforms['mieCoefficient'].value = 0.005;
+skyUniforms['mieDirectionalG'].value = 0.7;
+
+const elevation = 15; // Ángulo del sol en grados
+const azimuth = 180;
+const phi = THREE.MathUtils.degToRad(90 - elevation);
+const theta = THREE.MathUtils.degToRad(azimuth);
+sun.setFromSphericalCoords(1, phi, theta);
+skyUniforms['sunPosition'].value.copy(sun);
+
+// Iluminación realista basada en el sol
+scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x182030, 1.2));
+const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
+dirLight.position.copy(sun).multiplyScalar(100);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+scene.add(dirLight);
 
 const clock = new THREE.Clock();
-
 const worldOctree = new Octree();
-const playerCollider = new Capsule(
-  new THREE.Vector3(0, 0.35, 0),
-  new THREE.Vector3(0, 1, 0),
-  0.35
-);
+const playerCollider = new Capsule(new THREE.Vector3(0, 0.35, 0), new THREE.Vector3(0, 1, 0), 0.35);
 const playerVelocity = new THREE.Vector3();
 const playerDirection = new THREE.Vector3();
 const keyStates = {};
 let playerOnFloor = false;
 
-// Mundo Físico de Rapier
+// Rapier World
 const gravity = { x: 0, y: -25.0, z: 0 };
 const physicsWorld = new RAPIER.World(gravity);
-const physicalObjects = [];
+let physicalObjects = [];
 const lasers = [];
 const particles = [];
 
 // ==========================================
-// FABRICA DE 5 FIGURAS GEOMÉTRICAS CON FÍSICA
+// 2. MATERIALES Y DENSIDADES DIVERSIFICADAS
 // ==========================================
+const MATERIALS = {
+  plastic: { friction: 0.5, restitution: 0.4, density: 1.5, roughness: 0.3, metalness: 0.1 },
+  wood:    { friction: 0.7, restitution: 0.2, density: 2.5, roughness: 0.7, metalness: 0.0 },
+  metal:   { friction: 0.4, restitution: 0.1, density: 8.0, roughness: 0.2, metalness: 0.8 },
+  glass:   { friction: 0.1, restitution: 0.7, density: 3.0, roughness: 0.1, metalness: 0.9 }
+};
 
-function createPhysicalShape(type, x, y, z, scale, colorHex = 0x94a3b8) {
+function createPhysicalShape(type, x, y, z, scale, colorHex, matType = 'plastic') {
   let geometry, colliderDesc;
-  const mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.4, metalness: 0.2 });
+  const matProps = MATERIALS[matType];
+  const mat = new THREE.MeshStandardMaterial({
+    color: colorHex,
+    roughness: matProps.roughness,
+    metalness: matProps.metalness
+  });
 
   switch (type) {
-    case 'box': { // 1. CUBO
-      const sx = scale * (0.8 + Math.random() * 0.4);
-      const sy = scale * (0.8 + Math.random() * 0.4);
-      const sz = scale * (0.8 + Math.random() * 0.4);
-      geometry = new THREE.BoxGeometry(sx, sy, sz);
-      colliderDesc = RAPIER.ColliderDesc.cuboid(sx / 2, sy / 2, sz / 2)
-        .setFriction(0.8).setRestitution(0.05);
+    case 'box':
+      geometry = new THREE.BoxGeometry(scale, scale, scale);
+      colliderDesc = RAPIER.ColliderDesc.cuboid(scale / 2, scale / 2, scale / 2);
       break;
-    }
-    case 'sphere': { // 2. ESFERA
-      const r = scale * 0.6;
-      geometry = new THREE.SphereGeometry(r, 24, 24);
-      colliderDesc = RAPIER.ColliderDesc.ball(r)
-        .setFriction(0.3).setRestitution(0.6); // Alta rodadura y rebote
+    case 'sphere':
+      geometry = new THREE.SphereGeometry(scale * 0.55, 24, 24);
+      colliderDesc = RAPIER.ColliderDesc.ball(scale * 0.55);
       break;
-    }
-    case 'cylinder': { // 3. CILINDRO
-      const r = scale * 0.45;
-      const h = scale * 1.2;
-      geometry = new THREE.CylinderGeometry(r, r, h, 16);
-      colliderDesc = RAPIER.ColliderDesc.cylinder(h / 2, r)
-        .setFriction(0.6).setRestitution(0.1);
+    case 'cylinder':
+      geometry = new THREE.CylinderGeometry(scale * 0.4, scale * 0.4, scale * 1.1, 16);
+      colliderDesc = RAPIER.ColliderDesc.cylinder(scale * 0.55, scale * 0.4);
       break;
-    }
-    case 'cone': { // 4. CONO
-      const r = scale * 0.55;
-      const h = scale * 1.1;
-      geometry = new THREE.ConeGeometry(r, h, 16);
-      colliderDesc = RAPIER.ColliderDesc.cone(h / 2, r)
-        .setFriction(0.7).setRestitution(0.2);
+    case 'cone':
+      geometry = new THREE.ConeGeometry(scale * 0.5, scale * 1.1, 16);
+      colliderDesc = RAPIER.ColliderDesc.cone(scale * 0.55, scale * 0.5);
       break;
-    }
-    case 'icosahedron': { // 5. ICOSAEDRO (Poliedro de 20 caras)
-      const r = scale * 0.55;
-      geometry = new THREE.IcosahedronGeometry(r, 0);
-      
-      // Obtener vértices para colisionador Convex Hull en Rapier
+    case 'icosahedron':
+      geometry = new THREE.IcosahedronGeometry(scale * 0.5, 0);
       const pos = geometry.attributes.position.array;
-      colliderDesc = RAPIER.ColliderDesc.convexHull(new Float32Array(pos))
-        .setFriction(0.5).setRestitution(0.35);
+      colliderDesc = RAPIER.ColliderDesc.convexHull(new Float32Array(pos));
       break;
-    }
   }
+
+  colliderDesc.setFriction(matProps.friction)
+    .setRestitution(matProps.restitution)
+    .setDensity(matProps.density);
 
   const mesh = new THREE.Mesh(geometry, mat);
   mesh.position.set(x, y, z);
@@ -107,22 +119,27 @@ function createPhysicalShape(type, x, y, z, scale, colorHex = 0x94a3b8) {
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic()
-    .setTranslation(x, y, z)
-    .setCcdEnabled(true);
-
+  const rigidBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z).setCcdEnabled(true);
   const body = physicsWorld.createRigidBody(rigidBodyDesc);
   physicsWorld.createCollider(colliderDesc, body);
 
-  physicalObjects.push({ mesh, body, initialPos: { x, y, z }, type });
+  physicalObjects.push({ mesh, body, initialPos: { x, y, z }, type, scale, colorHex, matType });
+  updateCounter();
 }
 
-// Generación variada y apilada de las 5 figuras por el mapa
-function spawnDiverseMapShapes() {
-  const palette = [0x38bdf8, 0xf43f5e, 0xfacc15, 0x4ade80, 0xa855f7, 0xf97316, 0xec4899, 0x06b6d4];
-  const shapeTypes = ['box', 'sphere', 'cylinder', 'cone', 'icosahedron'];
+function clearAndSpawnShapes() {
+  // Eliminar físicas y meshes anteriores
+  physicalObjects.forEach((item) => {
+    scene.remove(item.mesh);
+    physicsWorld.removeRigidBody(item.body);
+  });
+  physicalObjects = [];
 
-  const zoneGrounds = [
+  const palette = [0x38bdf8, 0xf43f5e, 0xfacc15, 0x4ade80, 0xa855f7, 0xf97316, 0xec4899, 0x06b6d4];
+  const shapes = ['box', 'sphere', 'cylinder', 'cone', 'icosahedron'];
+  const matTypes = ['plastic', 'wood', 'metal', 'glass'];
+
+  const zones = [
     { minX: -4, maxX: 4, minZ: -10, maxZ: -4, baseY: 0.0 },
     { minX: -8, maxX: -4, minZ: -12, maxZ: -3, baseY: 0.0 },
     { minX: 4, maxX: 8, minZ: -12, maxZ: -3, baseY: 0.0 },
@@ -130,44 +147,44 @@ function spawnDiverseMapShapes() {
     { minX: 6, maxX: 9, minZ: -10, maxZ: -6, baseY: 2.3 }
   ];
 
-  // 1. TORRES MIXTAS APILADAS CON DIFERENTES FIGURAS
-  const numStacks = 4;
-  for (let s = 0; s < numStacks; s++) {
-    const zone = zoneGrounds[s % zoneGrounds.length];
+  // Generar Torres y figuras
+  zones.forEach((zone) => {
+    const stackHeight = 2 + Math.floor(Math.random() * 3);
     const x = zone.minX + Math.random() * (zone.maxX - zone.minX);
     const z = zone.minZ + Math.random() * (zone.maxZ - zone.minZ);
-    const stackHeight = 3;
-
     let currentY = zone.baseY;
 
-    for (let level = 0; level < stackHeight; level++) {
-      const shape = shapeTypes[Math.floor(Math.random() * shapeTypes.length)];
-      const scale = 0.8 + Math.random() * 0.4;
+    for (let h = 0; h < stackHeight; h++) {
+      const shape = shapes[Math.floor(Math.random() * shapes.length)];
+      const mat = matTypes[Math.floor(Math.random() * matTypes.length)];
+      const scale = 0.6 + Math.random() * 0.6;
       const color = palette[Math.floor(Math.random() * palette.length)];
 
       currentY += scale * 0.6;
-      createPhysicalShape(shape, x, currentY, z, scale, color);
+      createPhysicalShape(shape, x, currentY, z, scale, color, mat);
       currentY += scale * 0.6;
     }
-  }
+  });
 
-  // 2. FIGURAS DISPERSAS DE TAMAÑOS VARIADOS POR TODO EL MAPA
-  const totalShapes = 20;
-  for (let i = 0; i < totalShapes; i++) {
-    const zone = zoneGrounds[Math.floor(Math.random() * zoneGrounds.length)];
+  for (let i = 0; i < 15; i++) {
+    const zone = zones[Math.floor(Math.random() * zones.length)];
     const x = zone.minX + Math.random() * (zone.maxX - zone.minX);
     const z = zone.minZ + Math.random() * (zone.maxZ - zone.minZ);
-
-    const shape = shapeTypes[i % shapeTypes.length]; // Asegura la inclusión equitativa de las 5 figuras
-    const scale = 0.5 + Math.random() * 1.1; // Escalas desde 0.5m a 1.6m
-    const y = zone.baseY + scale + 0.1;
+    const shape = shapes[i % shapes.length];
+    const mat = matTypes[i % matTypes.length];
+    const scale = 0.5 + Math.random() * 1.0;
     const color = palette[Math.floor(Math.random() * palette.length)];
 
-    createPhysicalShape(shape, x, y, z, scale, color);
+    createPhysicalShape(shape, x, zone.baseY + scale + 0.1, z, scale, color, mat);
   }
 }
 
-// Cargar el escenario e integrar colisiones estáticas
+function updateCounter() {
+  const el = document.getElementById('object-counter');
+  if (el) el.innerText = `Objetos: ${physicalObjects.length}`;
+}
+
+// Cargar Escenario GLTF
 const loader = new GLTFLoader();
 loader.load('./assets/models/collision-world.glb', (gltf) => {
   const model = gltf.scene;
@@ -177,12 +194,11 @@ loader.load('./assets/models/collision-world.glb', (gltf) => {
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
-      if (child.material?.map) child.material.map.anisotropy = 4;
 
       const positions = child.geometry.attributes.position.array;
       const worldVertices = new Float32Array(positions.length);
-
       const vertex = new THREE.Vector3();
+
       for (let i = 0; i < positions.length; i += 3) {
         vertex.set(positions[i], positions[i + 1], positions[i + 2]);
         vertex.applyMatrix4(child.matrixWorld);
@@ -191,29 +207,19 @@ loader.load('./assets/models/collision-world.glb', (gltf) => {
         worldVertices[i + 2] = vertex.z;
       }
 
-      let indices;
-      if (child.geometry.index) {
-        indices = new Uint32Array(child.geometry.index.array);
-      } else {
-        indices = new Uint32Array(positions.length / 3);
-        for (let i = 0; i < indices.length; i++) indices[i] = i;
-      }
+      const indices = child.geometry.index ? new Uint32Array(child.geometry.index.array) : new Uint32Array(positions.length / 3);
+      if (!child.geometry.index) for (let i = 0; i < indices.length; i++) indices[i] = i;
 
-      const trimesh = RAPIER.ColliderDesc.trimesh(worldVertices, indices)
-        .setFriction(0.9)
-        .setRestitution(0.0);
-
-      physicsWorld.createCollider(trimesh);
+      physicsWorld.createCollider(RAPIER.ColliderDesc.trimesh(worldVertices, indices).setFriction(0.9));
     }
   });
 
   scene.add(model);
   worldOctree.fromGraphNode(model);
+  clearAndSpawnShapes();
+});
 
-  spawnDiverseMapShapes();
-
-}, undefined, (error) => console.error('Error al cargar el escenario:', error));
-
+// Controles y movimiento
 function getForwardVector() {
   camera.getWorldDirection(playerDirection);
   playerDirection.y = 0;
@@ -223,8 +229,7 @@ function getForwardVector() {
 function getSideVector() {
   camera.getWorldDirection(playerDirection);
   playerDirection.y = 0;
-  playerDirection.normalize();
-  playerDirection.cross(camera.up);
+  playerDirection.normalize().cross(camera.up);
   return playerDirection;
 }
 
@@ -242,28 +247,21 @@ function playerCollisions() {
   playerOnFloor = false;
   if (result) {
     playerOnFloor = result.normal.y > 0;
-    if (!playerOnFloor) {
-      playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
-    }
+    if (!playerOnFloor) playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
     playerCollider.translate(result.normal.multiplyScalar(result.depth));
   }
 }
 
 function pushNearbyObjects() {
-  const moving = new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z);
-  if (moving.lengthSq() < 0.04) return;
-  for (const item of physicalObjects) {
+  if (new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z).lengthSq() < 0.04) return;
+  physicalObjects.forEach((item) => {
     const p = item.body.translation();
-    const dx = p.x - camera.position.x;
-    const dz = p.z - camera.position.z;
-    const d = Math.hypot(dx, dz);
+    const d = Math.hypot(p.x - camera.position.x, p.z - camera.position.z);
     if (d < 1.3) {
       const force = 1.0 / Math.max(d, 0.25);
-      item.body.applyImpulse({ x: dx * force, y: 0.1, z: dz * force }, true);
-      // Aplicar toque de rotación al empujarlo físicamente
-      item.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * 0.5, y: 0.2, z: (Math.random() - 0.5) * 0.5 }, true);
+      item.body.applyImpulse({ x: (p.x - camera.position.x) * force, y: 0.1, z: (p.z - camera.position.z) * force }, true);
     }
-  }
+  });
 }
 
 function updatePlayer(deltaTime) {
@@ -286,72 +284,67 @@ function updatePlayer(deltaTime) {
   }
 }
 
-// --- DISPARO CON IMPULSO DINÁMICO Y TORQUE DE GIRO REALISTA ---
+// ==========================================
+// 3. MODOS DE DISPARO (NORMAL Y SUPER BOMBA)
+// ==========================================
 
-function shootLaser() {
+function shootLaser(isSuper = false) {
   if (document.pointerLockElement !== renderer.domElement) return;
   const direction = new THREE.Vector3();
   camera.getWorldDirection(direction).normalize();
 
-  // 1. Muzzle Flash
-  const muzzleFlash = new THREE.PointLight(0x38bdf8, 14, 6);
-  muzzleFlash.position.copy(camera.position).addScaledVector(direction, 0.5);
-  scene.add(muzzleFlash);
-  setTimeout(() => scene.remove(muzzleFlash), 40);
+  // Muzzle flash
+  const color = isSuper ? 0xf43f5e : 0x38bdf8;
+  const flash = new THREE.PointLight(color, isSuper ? 25 : 12, 8);
+  flash.position.copy(camera.position).addScaledVector(direction, 0.5);
+  scene.add(flash);
+  setTimeout(() => scene.remove(flash), 50);
 
-  // 2. Proyectil compuesto
   const laserGroup = new THREE.Group();
-
-  const coreGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.2, 8);
+  const radius = isSuper ? 0.12 : 0.035;
+  const coreGeo = new THREE.CylinderGeometry(radius, radius, 1.4, 8);
   coreGeo.rotateX(Math.PI / 2);
-  const coreMesh = new THREE.Mesh(coreGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  laserGroup.add(coreMesh);
-
-  const glowGeo = new THREE.CylinderGeometry(0.06, 0.06, 1.3, 8);
-  glowGeo.rotateX(Math.PI / 2);
-  const glowMat = new THREE.MeshStandardMaterial({
-    color: 0x0284c7,
-    emissive: 0x38bdf8,
-    emissiveIntensity: 6,
-    transparent: true,
-    opacity: 0.85
-  });
-  laserGroup.add(new THREE.Mesh(glowGeo, glowMat));
+  laserGroup.add(new THREE.Mesh(coreGeo, new THREE.MeshBasicMaterial({ color: isSuper ? 0xffea00 : 0xffffff })));
 
   laserGroup.position.copy(camera.position).addScaledVector(direction, 0.6);
   laserGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
-  
-  const laserLight = new THREE.PointLight(0x38bdf8, 4, 6);
-  laserGroup.add(laserLight);
-
   scene.add(laserGroup);
 
-  lasers.push({ group: laserGroup, direction, speed: 48, life: 1.5 });
+  lasers.push({ group: laserGroup, direction, speed: isSuper ? 60 : 45, life: 1.5, isSuper });
 }
 
-function createImpact(position, normal) {
-  const flash = new THREE.PointLight(0x38bdf8, 12, 7);
-  flash.position.copy(position);
-  scene.add(flash);
-  setTimeout(() => scene.remove(flash), 70);
+function createExplosion(position) {
+  // Shockwave expansiva
+  const waveGeo = new THREE.SphereGeometry(0.2, 16, 16);
+  const waveMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e, wireframe: true, transparent: true, opacity: 1 });
+  const waveMesh = new THREE.Mesh(waveGeo, waveMat);
+  waveMesh.position.copy(position);
+  scene.add(waveMesh);
 
-  const particleCount = 14;
-  const pGeo = new THREE.SphereGeometry(0.035, 4, 4);
-  const pMat = new THREE.MeshBasicMaterial({ color: 0x7dd3fc });
+  let waveSize = 0.2;
+  const waveInterval = setInterval(() => {
+    waveSize += 0.8;
+    waveMesh.scale.set(waveSize, waveSize, waveSize);
+    waveMat.opacity -= 0.1;
+    if (waveMat.opacity <= 0) {
+      clearInterval(waveInterval);
+      scene.remove(waveMesh);
+    }
+  }, 25);
 
-  for (let i = 0; i < particleCount; i++) {
-    const pMesh = new THREE.Mesh(pGeo, pMat);
-    pMesh.position.copy(position);
-
-    const velocity = new THREE.Vector3(
-      (Math.random() - 0.5) * 14 + (normal ? normal.x * 6 : 0),
-      Math.random() * 9 + 2 + (normal ? normal.y * 6 : 0),
-      (Math.random() - 0.5) * 14 + (normal ? normal.z * 6 : 0)
-    );
-
-    scene.add(pMesh);
-    particles.push({ mesh: pMesh, velocity, life: 0.35 + Math.random() * 0.25 });
-  }
+  // Impulso radial masivo sobre objetos cercanos
+  physicalObjects.forEach((item) => {
+    const p = item.body.translation();
+    const dist = Math.hypot(p.x - position.x, p.y - position.y, p.z - position.z);
+    if (dist < 8.0) {
+      const force = (8.0 - dist) * 8.0;
+      item.body.applyImpulse({
+        x: (p.x - position.x) * force,
+        y: (p.y - position.y) * force + 10,
+        z: (p.z - position.z) * force
+      }, true);
+    }
+  });
 }
 
 function updateLasers(deltaTime) {
@@ -365,21 +358,13 @@ function updateLasers(deltaTime) {
     if (hit) {
       const item = physicalObjects.find((entry) => entry.mesh === hit.object);
       if (item) {
-        // Impulso lineal
-        item.body.applyImpulse({
-          x: laser.direction.x * 15,
-          y: laser.direction.y * 15 + 3,
-          z: laser.direction.z * 15
-        }, true);
-
-        // Impulso angular (Torque de rotación al impacto)
-        item.body.applyTorqueImpulse({
-          x: (Math.random() - 0.5) * 4,
-          y: (Math.random() - 0.5) * 4,
-          z: (Math.random() - 0.5) * 4
-        }, true);
+        if (laser.isSuper) {
+          createExplosion(hit.point);
+        } else {
+          item.body.applyImpulse({ x: laser.direction.x * 16, y: laser.direction.y * 16 + 3, z: laser.direction.z * 16 }, true);
+          item.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * 5, y: (Math.random() - 0.5) * 5, z: (Math.random() - 0.5) * 5 }, true);
+        }
       }
-      createImpact(hit.point, hit.face ? hit.face.normal : null);
       scene.remove(laser.group);
       lasers.splice(i, 1);
       continue;
@@ -394,49 +379,43 @@ function updateLasers(deltaTime) {
   }
 }
 
-function updateParticles(deltaTime) {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.velocity.y -= 22 * deltaTime;
-    p.mesh.position.addScaledVector(p.velocity, deltaTime);
-    p.life -= deltaTime;
-
-    if (p.life <= 0) {
-      scene.remove(p.mesh);
-      particles.splice(i, 1);
-    }
-  }
-}
-
 function syncPhysics() {
-  for (const item of physicalObjects) {
+  physicalObjects.forEach((item) => {
     const p = item.body.translation();
     const q = item.body.rotation();
 
     if (p.y < -12) {
       item.body.setTranslation({ x: item.initialPos.x, y: item.initialPos.y + 0.5, z: item.initialPos.z }, true);
       item.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      item.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     } else {
       item.mesh.position.set(p.x, p.y, p.z);
       item.mesh.quaternion.set(q.x, q.y, q.z, q.w);
     }
-  }
+  });
 }
 
-document.addEventListener('keydown', (event) => keyStates[event.code] = true);
+// Eventos de teclado e interacción
+document.addEventListener('keydown', (event) => {
+  keyStates[event.code] = true;
+  if (event.code === 'KeyR') clearAndSpawnShapes(); // Respawn de figuras
+  if (event.code === 'KeyE') shootLaser(true);      // Disparo de Super Bomba
+});
+
 document.addEventListener('keyup', (event) => keyStates[event.code] = false);
+
 renderer.domElement.addEventListener('click', () => {
   if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
 });
+
 document.addEventListener('mousemove', (event) => {
   if (document.pointerLockElement !== renderer.domElement) return;
   camera.rotation.y -= event.movementX / 500;
   camera.rotation.x -= event.movementY / 500;
   camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x, -Math.PI / 2, Math.PI / 2);
 });
+
 document.addEventListener('mousedown', (event) => {
-  if (event.button === 0) shootLaser();
+  if (event.button === 0) shootLaser(false);
 });
 
 function animate() {
@@ -447,7 +426,6 @@ function animate() {
   physicsWorld.step();
   syncPhysics();
   updateLasers(delta);
-  updateParticles(delta);
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(animate);
