@@ -46,8 +46,9 @@ const gravity = { x: 0, y: -25.0, z: 0 };
 const physicsWorld = new RAPIER.World(gravity);
 const physicalObjects = [];
 const lasers = [];
+const particles = []; // Partículas para chispas e impactos
 
-// Crear cubo dinámico individual con CCD para no traspasar paredes
+// Crear cubo dinámico individual con CCD
 function createDynamicBox(x, y, z, sx, sy, sz, mass = 4, colorHex = 0x94a3b8) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(sx, sy, sz),
@@ -74,31 +75,28 @@ function createDynamicBox(x, y, z, sx, sy, sz, mass = 4, colorHex = 0x94a3b8) {
   physicalObjects.push({ mesh, body, initialPos: { x, y, z } });
 }
 
-// Generación ALEATORIA de cubos dispersos y apilados por todo el mapa
+// Generación ALEATORIA de cubos
 function spawnRandomMapBoxes() {
   const palette = [0x38bdf8, 0xf43f5e, 0xfacc15, 0x4ade80, 0xa855f7, 0xf97316, 0xec4899, 0x10b981];
 
-  // Zonas de suelo seguro en el mapa (Central, Izquierda, Derecha, Fondo y Plataformas)
   const zoneGrounds = [
-    { minX: -4, maxX: 4, minZ: -10, maxZ: -4, baseY: 0.0 },     // Patio central
-    { minX: -8, maxX: -4, minZ: -12, maxZ: -3, baseY: 0.0 },    // Pasillo izquierdo
-    { minX: 4, maxX: 8, minZ: -12, maxZ: -3, baseY: 0.0 },     // Pasillo derecho
-    { minX: -3, maxX: 3, minZ: -16, maxZ: -12, baseY: 2.3 },   // Plataforma trasera elevada
-    { minX: 6, maxX: 9, minZ: -10, maxZ: -6, baseY: 2.3 }      // Plataforma derecha elevada
+    { minX: -4, maxX: 4, minZ: -10, maxZ: -4, baseY: 0.0 },
+    { minX: -8, maxX: -4, minZ: -12, maxZ: -3, baseY: 0.0 },
+    { minX: 4, maxX: 8, minZ: -12, maxZ: -3, baseY: 0.0 },
+    { minX: -3, maxX: 3, minZ: -16, maxZ: -12, baseY: 2.3 },
+    { minX: 6, maxX: 9, minZ: -10, maxZ: -6, baseY: 2.3 }
   ];
 
-  // 1. GENERAR CUBOS APILADOS EN TORRES ALEATORIAS
-  const numStacks = 3 + Math.floor(Math.random() * 3); // Entre 3 y 5 torres
+  const numStacks = 3 + Math.floor(Math.random() * 3);
   for (let s = 0; s < numStacks; s++) {
     const zone = zoneGrounds[Math.floor(Math.random() * zoneGrounds.length)];
     const x = zone.minX + Math.random() * (zone.maxX - zone.minX);
     const z = zone.minZ + Math.random() * (zone.maxZ - zone.minZ);
-    const stackHeight = 2 + Math.floor(Math.random() * 3); // 2 a 4 niveles de altura
+    const stackHeight = 2 + Math.floor(Math.random() * 3);
 
     let currentY = zone.baseY;
 
     for (let level = 0; level < stackHeight; level++) {
-      // Tamaños aleatorios para los bloques de la torre (de 0.5m a 1.2m)
       const sizeX = 0.5 + Math.random() * 0.7;
       const sizeY = 0.5 + Math.random() * 0.7;
       const sizeZ = 0.5 + Math.random() * 0.7;
@@ -106,23 +104,21 @@ function spawnRandomMapBoxes() {
 
       currentY += sizeY / 2;
       createDynamicBox(x, currentY, z, sizeX, sizeY, sizeZ, 3 + sizeY * 2, color);
-      currentY += sizeY / 2; // Elevar el punto de origen para el siguiente piso de la torre
+      currentY += sizeY / 2;
     }
   }
 
-  // 2. GENERAR CUBOS DISPERSOS DE DIVERSOS TAMAÑOS
-  const totalLooseBoxes = 12 + Math.floor(Math.random() * 8); // Entre 12 y 20 cubos sueltos
+  const totalLooseBoxes = 12 + Math.floor(Math.random() * 8);
   for (let i = 0; i < totalLooseBoxes; i++) {
     const zone = zoneGrounds[Math.floor(Math.random() * zoneGrounds.length)];
     const x = zone.minX + Math.random() * (zone.maxX - zone.minX);
     const z = zone.minZ + Math.random() * (zone.maxZ - zone.minZ);
 
-    // Tamaños muy variados (pequeños de 0.4m hasta bloques gigantes de 1.6m)
     const sx = 0.4 + Math.random() * 1.2;
     const sy = 0.4 + Math.random() * 1.2;
     const sz = 0.4 + Math.random() * 1.2;
 
-    const y = zone.baseY + sy / 2 + 0.05; // Descansa directamente sobre el suelo de la zona
+    const y = zone.baseY + sy / 2 + 0.05;
     const color = palette[Math.floor(Math.random() * palette.length)];
 
     createDynamicBox(x, y, z, sx, sy, sz, 2 + sx * sy * sz * 3, color);
@@ -172,7 +168,6 @@ loader.load('./assets/models/collision-world.glb', (gltf) => {
   scene.add(model);
   worldOctree.fromGraphNode(model);
 
-  // Generar la disposición aleatoria de cubos
   spawnRandomMapBoxes();
 
 }, undefined, (error) => console.error('Error al cargar el escenario:', error));
@@ -247,31 +242,82 @@ function updatePlayer(deltaTime) {
   }
 }
 
+// --- SISTEMA DE DISPARO REALISTA Y CHISPAS ---
+
 function shootLaser() {
   if (document.pointerLockElement !== renderer.domElement) return;
   const direction = new THREE.Vector3();
   camera.getWorldDirection(direction).normalize();
 
-  const geometry = new THREE.CylinderGeometry(0.035, 0.035, 0.9, 10);
-  geometry.rotateX(Math.PI / 2);
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x67e8f9,
-    emissive: 0x22d3ee,
-    emissiveIntensity: 5
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.copy(camera.position).addScaledVector(direction, 0.8);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
-  scene.add(mesh);
+  // 1. Destello en el cañón/cámara (Muzzle Flash)
+  const muzzleFlash = new THREE.PointLight(0x38bdf8, 12, 5);
+  muzzleFlash.position.copy(camera.position).addScaledVector(direction, 0.5);
+  scene.add(muzzleFlash);
+  setTimeout(() => scene.remove(muzzleFlash), 40);
 
-  lasers.push({ mesh, direction, speed: 35, life: 1.5 });
+  // 2. Proyectil compuesto (Núcleo incandescente + Estela de plasma)
+  const laserGroup = new THREE.Group();
+
+  // Núcleo brillante
+  const coreGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.2, 8);
+  coreGeo.rotateX(Math.PI / 2);
+  const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+  laserGroup.add(coreMesh);
+
+  // Resplandor exterior (Aura azul/neón)
+  const glowGeo = new THREE.CylinderGeometry(0.06, 0.06, 1.3, 8);
+  glowGeo.rotateX(Math.PI / 2);
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0x0284c7,
+    emissive: 0x38bdf8,
+    emissiveIntensity: 6,
+    transparent: true,
+    opacity: 0.85
+  });
+  const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+  laserGroup.add(glowMesh);
+
+  // Posicionar y orientar el grupo hacia la cámara
+  laserGroup.position.copy(camera.position).addScaledVector(direction, 0.6);
+  laserGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
+  
+  // Luz puntual propia que viaja con el rayo
+  const laserLight = new THREE.PointLight(0x38bdf8, 4, 6);
+  laserGroup.add(laserLight);
+
+  scene.add(laserGroup);
+
+  lasers.push({ group: laserGroup, direction, speed: 45, life: 1.5 });
 }
 
-function createImpact(position) {
-  const flash = new THREE.PointLight(0x67e8f9, 8, 4, 2);
+// Explosión de chispas reales al golpear un objeto
+function createImpact(position, normal) {
+  // Destello de impacto
+  const flash = new THREE.PointLight(0x38bdf8, 10, 6);
   flash.position.copy(position);
   scene.add(flash);
-  setTimeout(() => scene.remove(flash), 90);
+  setTimeout(() => scene.remove(flash), 70);
+
+  // Crear 12 chispas incandescentes que vuelan
+  const particleCount = 12;
+  const pGeo = new THREE.SphereGeometry(0.03, 4, 4);
+  const pMat = new THREE.MeshBasicMaterial({ color: 0x7dd3fc });
+
+  for (let i = 0; i < particleCount; i++) {
+    const pMesh = new THREE.Mesh(pGeo, pMat);
+    pMesh.position.copy(position);
+
+    // Velocidad en abanico según la normal del impacto
+    const velocity = new THREE.Vector3(
+      (Math.random() - 0.5) * 12 + (normal ? normal.x * 5 : 0),
+      Math.random() * 8 + 2 + (normal ? normal.y * 5 : 0),
+      (Math.random() - 0.5) * 12 + (normal ? normal.z * 5 : 0)
+    );
+
+    scene.add(pMesh);
+    particles.push({ mesh: pMesh, velocity, life: 0.35 + Math.random() * 0.25 });
+  }
 }
 
 function updateLasers(deltaTime) {
@@ -279,29 +325,44 @@ function updateLasers(deltaTime) {
   for (let i = lasers.length - 1; i >= 0; i--) {
     const laser = lasers[i];
     const distance = laser.speed * deltaTime;
-    const ray = new THREE.Raycaster(laser.mesh.position, laser.direction, 0, distance + 0.5);
+    const ray = new THREE.Raycaster(laser.group.position, laser.direction, 0, distance + 0.5);
     const hit = ray.intersectObjects(meshes, false)[0];
 
     if (hit) {
       const item = physicalObjects.find((entry) => entry.mesh === hit.object);
       if (item) {
         item.body.applyImpulse({
-          x: laser.direction.x * 10,
-          y: laser.direction.y * 10 + 1.5,
-          z: laser.direction.z * 10
+          x: laser.direction.x * 14,
+          y: laser.direction.y * 14 + 2.5,
+          z: laser.direction.z * 14
         }, true);
       }
-      createImpact(hit.point);
-      scene.remove(laser.mesh);
+      createImpact(hit.point, hit.face ? hit.face.normal : null);
+      scene.remove(laser.group);
       lasers.splice(i, 1);
       continue;
     }
 
-    laser.mesh.position.addScaledVector(laser.direction, distance);
+    laser.group.position.addScaledVector(laser.direction, distance);
     laser.life -= deltaTime;
     if (laser.life <= 0) {
-      scene.remove(laser.mesh);
+      scene.remove(laser.group);
       lasers.splice(i, 1);
+    }
+  }
+}
+
+// Actualizar movimiento y gravedad de las chispas de impacto
+function updateParticles(deltaTime) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.velocity.y -= 20 * deltaTime; // Gravedad en las chispas
+    p.mesh.position.addScaledVector(p.velocity, deltaTime);
+    p.life -= deltaTime;
+
+    if (p.life <= 0) {
+      scene.remove(p.mesh);
+      particles.splice(i, 1);
     }
   }
 }
@@ -345,6 +406,7 @@ function animate() {
   physicsWorld.step();
   syncPhysics();
   updateLasers(delta);
+  updateParticles(delta);
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(animate);
